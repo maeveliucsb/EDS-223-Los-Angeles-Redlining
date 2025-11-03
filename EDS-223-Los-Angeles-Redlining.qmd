@@ -1,0 +1,233 @@
+---
+title: "EDS-223-Los-Angeles-Redlining"
+author: Maeve Li Oak
+date: 11/3/2025
+format: html
+editor: visual
+---
+
+# Setup
+
+This portion loads the libraries and imports the data necessary for the rest of the document. Each dataset will be checked for validity with 'st_is_valid' and will be made valid with 'st_make_valid' if invalid. 
+
+```{r}
+#| message: false
+#| warning: false
+#Library Loading
+library(tidyverse) # data wrangling
+library(sf) # for working with spatial data
+library(tmap) # for creating pretty maps
+library(here) # maneuvering file paths
+library(viridisLite) # map palettes
+library(kableExtra) # pretty table
+library(patchwork) # combine plots
+
+#data loading
+ejscreen <- st_read(here::here("data", "ejscreen", 
+                         "EJSCREEN_2023_BG_StatePct_with_AS_CNMI_GU_VI.gdb"),
+              quiet = TRUE) # hiding message
+unique(st_is_valid(ejscreen))#checking validity, is valid. 
+
+HOLC <- holc <- st_read(here::here("data", "mapping-inequality",
+                           "mapping-inequality-los-angeles.json")
+                , quiet = TRUE) %>% # hiding message
+  st_make_valid() # was not valid before, is now
+unique(st_is_valid(holc)) 
+
+BDobs <- st_read(here::here("data", "gbif-birds-LA",
+                           "gbif-birds-LA.shp"),
+                quiet = TRUE) # hiding message
+unique(st_is_valid(BDobs)) #checking validity, is valid
+```
+
+# Part 1: Legacy of redlining in current environmental (in)justice
+## 1.1-Mapping
+This portion of the project maps the distribution of HOLC grades in Los Angeles, not all portions of Los Angeles are mapped due to urbanization and growth in Los Angeles. 
+
+This portion builds the color palette for the HOLC grades in Los Angeles, the colors correspond with the the colors from the original HOLC distinctions (A being highest, and D being lowest)
+```{r}
+# let's make a custom, **colorblind-friendly*** color palette for the grades
+# hex codes come from colorblind-friendly Paul Tol color palette (the "bright" one)
+HOLC_colors <-c(
+  "A"  = "#CCDDAA", # green
+  "B"  = "#CCEEFF", # blue
+  "C"  = "#EEdd88", # yellow
+  "D"  =  "#FFCCCC", # pink
+  "NA" = "black",
+  "NA_real" = "black")
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 6
+#| fig-width: 6
+Map1 <- tm_shape(HOLC) + # import holc geo data
+  tm_basemap("Esri.WorldGrayCanvas") + # dull background that still has geo info
+  tm_graticules() + # adding laititude and longitude lines
+  tm_fill(fill = "grade", 
+          fill.scale = tm_scale(values =  # assigning colors manually to match the historical figures
+                                 HOLC_colors),
+          # this matches historical redlining maps in the metadata
+          fill.legend = tm_legend(title = "HOLC Grade")) +
+   tm_borders(col = "black", lwd = 0.5) + # adds borders for HOLC grades
+  tm_title("HOLC Grade Designations in Los Angeles") + # including map title
+  tm_credits("Data Source: Digital Scholarship Lab", position = c("right", "bottom")) # data credits
+
+Map1
+```
+
+## 1.2 Making a table summarizing: 
+
+-   The percentage of census block groups that fall within each HOLC grade
+-   Also include the percent of census block groups that don’t fall within a HOLC grade
+
+The `ejscreen` environmental data will be filtered to just Los Angeles county to get `EJLA`. Next, I will check the CRS for `EJLA` and the `HOLC` data and if they are not the same, will convert them to the same crs. They will then be joined using st_join to add the HOLC data to the spatial EJScreen data. 
+
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 6
+#| fig-width: 6
+EJLA <- ejscreen %>% filter(CNTY_NAME == 'Los Angeles County') #filtering for just Los Angeles
+
+#making geometries valid
+HOLC <- st_make_valid(HOLC)
+EJLA <- st_make_valid(EJLA)
+#aligning CRSs 
+if (st_crs(HOLC) != st_crs(EJLA)) {
+  HOLC <- st_transform(HOLC, st_crs(EJLA))
+}
+#joining EJLA and HOLC
+EJLA_HOLC <- st_join(EJLA, HOLC) %>%
+  st_drop_geometry() #geometry will no longer be needed in this portion
+```
+This portion now creates the table summarizing the proportion of census group blocs in each grade and the proportion without a grade at all.  
+```{r}
+#| message: false
+#| warning: false
+EJLA_HOLC %>% 
+  group_by(grade) %>% 
+   summarise(Percent = round((n() / 8988) * 100, 1)) %>% #number of observations in the group, divided by total rows, multiplied by 100, and rounded to 1 decimal place
+  mutate(Percent = paste0(Percent, "%")) %>% 
+  rename(HOLC_Grade = grade) %>%   # capitalizing
+  st_drop_geometry() %>% 
+  # creating the table
+  kbl(booktabs = T, caption = "Proportion of Census Block groups") %>%
+  kable_styling(latex_options = "striped")
+```
+
+#### 1.3 Create at least two visualizations summarizing current conditions (from the EJScreen data) within HOLC grades using the mean of the following variables (you may combine variables or create separate plots):
+
+-   \% low income
+-   Percentile for Particulate Matter 2.5
+-   percentile for low life expectancy
+-   Use ggplot for your visualizations! You will first need to calculate mean of each variable grouped by HOLC grade.
+
+#### 1.3a Plot 1, Income Distribution By Grade
+This plot graphs low income distribution across HOLC grade, the goal is to illustrate the modern impacts of red-lining, even decades after the practice has been considered obsolete.
+
+```{r}
+#finding the means 
+means_by_grade <- EJLA_HOLC |>
+  st_drop_geometry() |>
+  group_by(grade) |>
+  summarise(
+    mean_low_income_pct        = mean(LOWINCPCT,   na.rm = TRUE),
+    mean_pm25_percentile       = mean(PM25,     na.rm = TRUE),
+    mean_lifeexp_percentile    = mean(LIFEEXPPCT,  na.rm = TRUE),
+    .groups = "drop"
+  )
+#visualization 1
+ggplot(means_by_grade, aes(x = grade, y = mean_low_income_pct, fill = grade)) +
+  geom_col() +
+  scale_fill_manual(values = HOLC_colors, na.value = "grey") + # using the same color palette as in the previous map
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1)) +  # adding Y axis labels
+  labs(
+    title = "% Low Income by HOLC Grade (LA County)",
+    x = "HOLC Grade",
+    y = "Mean % Low Income (block-group mean within grade)"
+  ) +  
+  theme_light() + # clean theme
+  theme(legend.position = "none")
+
+```
+
+####1.3b Plot 2, low life expectancy percentile and pm 2.5 percentile
+This portion visualizes the distribution of low life expectancy and harmful particulate concentration across HOLC grades using a point and line graph. The colors correspond with HOLC grades from the original grading colors from the HOLC metadata. 
+
+```{r}
+plot_long <- means_by_grade %>%
+  select(grade,
+         `PM2.5 Percentile` = mean_pm25_percentile,
+         `Low Life Expectancy Percentile` = mean_lifeexp_percentile) %>%
+  pivot_longer(-grade, names_to = "indicator", values_to = "percentile")
+
+ggplot(plot_long, aes(x = grade, y = percentile, fill = grade)) +
+  geom_point(shape = 21, size = 3, color = 'grey30', stroke = 0.5) + #points
+  geom_line(aes(group = indicator)) + #trend line
+  facet_wrap(~ indicator, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = HOLC_colors, drop = FALSE) + #coloring in the dots
+  labs(
+    title = "Environmental & Health Percentiles by HOLC Grade (LA County)",
+    x = "HOLC Grade",
+    y = "Mean Percentile (0–100)"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+#### Write a brief paragraph reflecting on these results
+
+These plots illustrate some comparisons between redlined districts in Los Angeles and their mean percent low income, the mean life expectancy percentile and the PM 2.5 percentile by redlined grade. The least redlined grade (A) has the lowest mean percent low income, and the lowest PM 2.5 percentile, as well as the highest life expectancy. This increases with each subsequent grade, until the highest redlined grade (D) has the highest mean percent low income, highest PM 2.5 percentile, and lowest life expectancy. These figures illustrate the holdover of historic exclusionary policy and how it can have negative impacts on individuals even in the modern day.
+
+# Part 2: Legacy of redlining in biodiversity observations
+
+This portion of the document analyzes the biodiversity across HOLC grades in Los Angeles using bird observation data from the digital scholarship lab in the University of Richmond.
+
+#### 2.1 Create a figure summarizing the percent of observations within redlined neighborhoods within each HOLC grade
+
+-   The percentage of bird observations within each HOLC grade
+-   Include an appropriate title, axis labels, and legend
+
+This portion configures the data to ensure all datasets have the same crs. The bird data will then be joined with HOLC data for further analysis. 
+
+```{r}
+#making geometries valid
+BDobs <- st_make_valid(BDobs)
+#aligning CRSs without overwriting
+if (st_crs(HOLC) != st_crs(BDobs)) {
+  HOLC <- st_transform(HOLC, st_crs(BDobs))
+}
+#marrying the datasets
+Holc_Bdobs <- st_join(BDobs, HOLC["grade"], join = st_intersects)
+```
+
+This portion calculates the summary statistics by HOLC grade and visualizes them in a bar plot. The NA portion will be much larger than the other ones due to the rapid urban growth in Los Angeles. 
+```{r}
+#finding the amount of visualizations in each red lined area
+nrow(Holc_Bdobs) #finding the total count
+#calculating percentages
+Holc_Bdobs_summary <- Holc_Bdobs %>% 
+  group_by(grade) %>% # within each holc grade calculate:
+  summarise(
+  percent = round((n() / 1288865) * 100, 1)) %>% # the percent of bird obs
+  mutate(percent = paste0(percent, "%")) %>% #
+  st_drop_geometry() # dropping geometry
+#Visualization
+ggplot(Holc_Bdobs_summary, aes(x = grade, y = `Percentage of Bird Observations`, fill = grade)) +
+  geom_col() +
+  scale_fill_manual(values = HOLC_colors, na.value = "grey") + # using the same color palette as in the previous map
+  scale_y_continuous(labels = comma) +  
+  labs(
+    title = "Bird Observations by HOLC Grade in Los Angeles",
+    x = "HOLC Grade",
+    y = "Bird Observations (count)"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+#### Write a brief paragraph reflecting on these results
+
+The majority of bird observations were taken in areas without HOLC grades, which is generally unsurprising considering that LA has increased significantly in size since the creation of HOLC grades and redlining. When we ignore the NA points, the majority of the points are concentrated in the A and C grades. This indicates that individuals with higher socioeconomic status have better biodiversity access than those who are lower income.
