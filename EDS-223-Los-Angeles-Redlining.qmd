@@ -193,8 +193,6 @@ This portion of the document analyzes the biodiversity across HOLC grades in Los
 This portion configures the data to ensure all datasets have the same crs. The bird data will then be joined with HOLC data for further analysis. 
 
 ```{r}
-#making geometries valid
-BDobs <- st_make_valid(BDobs)
 #aligning CRSs without overwriting
 if (st_crs(HOLC) != st_crs(BDobs)) {
   HOLC <- st_transform(HOLC, st_crs(BDobs))
@@ -215,10 +213,9 @@ Holc_Bdobs_summary <- Holc_Bdobs %>%
   mutate(percent = paste0(percent, "%")) %>% #
   st_drop_geometry() # dropping geometry
 #Visualization
-ggplot(Holc_Bdobs_summary, aes(x = grade, y = `Percentage of Bird Observations`, fill = grade)) +
+ggplot(Holc_Bdobs_summary, aes(x = grade, y = `percent`, fill = grade)) +
   geom_col() +
   scale_fill_manual(values = HOLC_colors, na.value = "grey") + # using the same color palette as in the previous map
-  scale_y_continuous(labels = comma) +  
   labs(
     title = "Bird Observations by HOLC Grade in Los Angeles",
     x = "HOLC Grade",
